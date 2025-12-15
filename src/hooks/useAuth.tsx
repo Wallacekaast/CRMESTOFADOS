@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { apiFetch } from '@/lib/api';
 
-type LocalUser = { email: string } | null;
+type LocalUser = { email: string; role?: string } | null;
 type LocalSession = null;
 
 interface AuthContextType {
@@ -23,8 +24,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const raw = localStorage.getItem('auth_user');
       if (raw) {
-        const parsed = JSON.parse(raw) as { email: string };
-        setUser({ email: parsed.email });
+        const parsed = JSON.parse(raw) as { email: string; role?: string };
+        const isAdminEmail = String(parsed.email || '').toLowerCase() === 'davelnetbr@gmail.com';
+        const role = isAdminEmail ? 'admin' : parsed.role;
+        if (isAdminEmail && parsed.role !== 'admin') {
+          localStorage.setItem('auth_user', JSON.stringify({ email: parsed.email, role }));
+        }
+        setUser({ email: parsed.email, role });
       } else {
         // default: keep unauthenticated until sign-in happens
         setUser(null);
@@ -37,8 +43,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = async (email: string, password: string, fullName?: string) => {
     try {
-      localStorage.setItem('auth_user', JSON.stringify({ email }));
-      setUser({ email });
+      const cleanEmail = email.trim();
+      const resp = await apiFetch('/api/auth/signup', {
+        method: 'POST',
+        body: JSON.stringify({ email: cleanEmail, password, fullName }),
+      });
+      const role = (resp as { role?: string })?.role || 'member';
+      localStorage.setItem('auth_user', JSON.stringify({ email: cleanEmail, role }));
+      setUser({ email: cleanEmail, role });
       return { error: null };
     } catch (e) {
       return { error: e instanceof Error ? e : new Error('Sign up failed') };
@@ -47,8 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     try {
-      localStorage.setItem('auth_user', JSON.stringify({ email }));
-      setUser({ email });
+      const cleanEmail = email.trim();
+      const resp = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: cleanEmail, password }),
+      });
+      const role = (resp as { role?: string })?.role || undefined;
+      localStorage.setItem('auth_user', JSON.stringify({ email: cleanEmail, role }));
+      setUser({ email: cleanEmail, role });
       return { error: null };
     } catch (e) {
       return { error: e instanceof Error ? e : new Error('Sign in failed') };

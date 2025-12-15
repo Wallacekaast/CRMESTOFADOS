@@ -10,7 +10,10 @@ import {
   LayoutDashboard,
   ShoppingCart,
   Sofa,
-  BarChart3
+  BarChart3,
+  Users,
+  User as UserIcon,
+  ListOrdered
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
@@ -20,7 +23,7 @@ import { useState, useEffect } from 'react';
 import { apiFetch } from '@/lib/api';
 import { addDays, isAfter, isBefore, parseISO } from 'date-fns';
 
-const navItems = [
+const mainNavItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/pdv', icon: ShoppingCart, label: 'PDV' },
   { to: '/produtos', icon: Sofa, label: 'Produtos' },
@@ -28,14 +31,22 @@ const navItems = [
   { to: '/producao', icon: Factory, label: 'Produção' },
   { to: '/estoque', icon: Package, label: 'Estoque' },
   { to: '/boletos', icon: Receipt, label: 'Boletos' },
-  
   { to: '/ponto', icon: Clock, label: 'Ponto' },
+  { to: '/membros-admin', icon: Users, label: 'Membros' },
+];
+
+const clientNavItems = [
+  { to: '/minha-conta', icon: UserIcon, label: 'Minha Conta' },
+  { to: '/meus-pedidos', icon: ListOrdered, label: 'Meus Pedidos' },
+  { to: '/catalogo', icon: ShoppingCart, label: 'Catálogo' },
 ];
 
 export function Sidebar() {
   const { signOut, user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [boletosAlert, setBoletosAlert] = useState(0);
+  const [isMember, setIsMember] = useState<boolean | null>(null);
+  const isAdmin = (user as { role?: string } | null)?.role === 'admin';
 
   useEffect(() => {
     const checkBoletosAlert = async () => {
@@ -58,6 +69,20 @@ export function Sidebar() {
     const interval = setInterval(checkBoletosAlert, 60000);
     return () => clearInterval(interval);
   }, []);
+  useEffect(() => {
+    (async () => {
+      try {
+        if (user?.email) {
+          const res = await apiFetch(`/api/members/exists?email=${encodeURIComponent(user.email)}`);
+          setIsMember(Boolean(res?.exists));
+        } else {
+          setIsMember(null);
+        }
+      } catch {
+        setIsMember(null);
+      }
+    })();
+  }, [user?.email]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -107,7 +132,7 @@ export function Sidebar() {
 
           {/* Navigation */}
           <nav className="flex-1 space-y-1">
-            {navItems.map((item) => (
+            {(isAdmin || !isMember) && mainNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -128,6 +153,25 @@ export function Sidebar() {
                     {boletosAlert}
                   </span>
                 )}
+              </NavLink>
+            ))}
+            <div className="mt-4 mb-1 px-3 text-xs font-semibold text-muted-foreground">Cliente</div>
+            {clientNavItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                onClick={closeSidebar}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
+                    isActive
+                      ? 'bg-primary text-primary-foreground shadow-md shadow-primary/20'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )
+                }
+              >
+                <item.icon className="h-5 w-5" />
+                {item.label}
               </NavLink>
             ))}
           </nav>

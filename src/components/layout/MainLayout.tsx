@@ -2,9 +2,12 @@ import { Sidebar } from './Sidebar';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { useTheme } from 'next-themes';
-import { Search, Sun, Moon } from 'lucide-react';
+import { Search, Sun, Moon, AlertTriangle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { apiFetch } from '@/lib/api';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -13,6 +16,25 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const { user } = useAuth();
   const { theme, setTheme } = useTheme();
+  const [apiOffline, setApiOffline] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkApiHealth = async () => {
+      try {
+        await apiFetch('/api/health');
+        if (!cancelled) setApiOffline(false);
+      } catch {
+        if (!cancelled) setApiOffline(true);
+      }
+    };
+    checkApiHealth();
+    const interval = setInterval(checkApiHealth, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -36,6 +58,11 @@ export function MainLayout({ children }: MainLayoutProps) {
             >
               {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
+            {user?.role && (
+              <Badge variant={user.role === 'admin' ? 'default' : 'secondary'} className="uppercase">
+                {user.role}
+              </Badge>
+            )}
             <Avatar>
               <AvatarFallback>
                 {(user?.email || 'U').charAt(0).toUpperCase()}
@@ -43,6 +70,14 @@ export function MainLayout({ children }: MainLayoutProps) {
             </Avatar>
           </div>
         </div>
+        {apiOffline && (
+          <div className="px-4 py-2 border-t border-destructive/30 bg-destructive/10 text-destructive">
+            <div className="mx-auto flex items-center gap-2 text-sm">
+              <AlertTriangle className="h-4 w-4" />
+              <span>API indisponível. Verifique o servidor.</span>
+            </div>
+          </div>
+        )}
       </header>
 
       <main className="min-h-screen lg:ml-64 p-4 pt-16 lg:pt-20">

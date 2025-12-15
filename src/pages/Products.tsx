@@ -16,6 +16,7 @@ import {
   DollarSign,
   AlertTriangle
 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 
 interface Product {
   id: string;
@@ -52,6 +53,9 @@ export default function Products() {
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>('');
+  const [importOpen, setImportOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState('https://meucomercio.com.br/leaoestofado');
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     fetchProducts();
@@ -185,6 +189,24 @@ export default function Products() {
     } catch (error) {
       console.error('Error deleting product:', error);
       toast({ title: 'Erro ao excluir produto', variant: 'destructive' });
+    }
+  };
+
+  const runImport = async () => {
+    try {
+      setImporting(true);
+      const res = await apiFetch('/api/import/products', {
+        method: 'POST',
+        body: JSON.stringify({ site_url: importUrl })
+      }) as { imported: number };
+      toast({ title: `Importados ${res?.imported ?? 0} produto(s)` });
+      setImportOpen(false);
+      fetchProducts();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Erro ao importar produtos';
+      toast({ title: msg, variant: 'destructive' });
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -380,6 +402,25 @@ export default function Products() {
                   className="pl-9"
                 />
               </div>
+              <Dialog open={importOpen} onOpenChange={setImportOpen}>
+                <DialogTrigger asChild>
+                  <Button className="w-full sm:w-auto">Importar do Site</Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Importar Produtos</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-sm font-medium">URL do site</label>
+                      <Input value={importUrl} onChange={(e) => setImportUrl(e.target.value)} />
+                    </div>
+                    <Button onClick={runImport} disabled={importing}>
+                      {importing ? 'Importando...' : 'Importar'}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
           </CardHeader>
           <CardContent>

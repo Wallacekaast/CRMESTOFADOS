@@ -30,7 +30,8 @@ import {
   Upload,
   Download,
   Search,
-  Filter
+  Filter,
+  Pencil
 } from 'lucide-react';
 import { format, parseISO, addDays, isBefore, isAfter } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -74,6 +75,18 @@ export default function Boletos() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'paid' | 'overdue'>('all');
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editData, setEditData] = useState<{
+    id: string | null;
+    description: string;
+    amount: string;
+    due_date: string;
+    supplier: string;
+    status: 'pending' | 'paid';
+    file_url: string | null;
+  }>({ id: null, description: '', amount: '', due_date: '', supplier: '', status: 'pending', file_url: null });
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [editingUploading, setEditingUploading] = useState(false);
 
   const [formData, setFormData] = useState({
     description: '',
@@ -198,6 +211,68 @@ export default function Boletos() {
       fetchBoletos();
     } catch (err) {
       toast.error('Erro ao excluir boleto');
+    }
+  };
+
+  const openEdit = (b: Boleto) => {
+    setEditData({
+      id: b.id,
+      description: b.description || '',
+      amount: String(b.amount ?? ''),
+      due_date: b.due_date ? String(b.due_date).slice(0, 10) : '',
+      supplier: b.supplier || '',
+      status: b.is_paid ? 'paid' : 'pending',
+      file_url: b.file_url || null,
+    });
+    setEditFile(null);
+    setIsEditOpen(true);
+  };
+
+  const submitEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editData.id) return;
+    try {
+      let newFileUrl: string | null = editData.file_url || null;
+      if (editFile) {
+        setEditingUploading(true);
+        const ext = editFile.name.split('.').pop();
+        const fileName = `${Date.now()}.${ext}`;
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || '');
+            const b64 = result.includes(',') ? result.split(',')[1] : result;
+            resolve(b64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(editFile);
+        });
+        const uploadRes = await apiFetch('/api/upload/boletos', {
+          method: 'POST',
+          body: JSON.stringify({ fileName, base64 }),
+        }) as { url: string };
+        newFileUrl = uploadRes.url;
+        setEditingUploading(false);
+      }
+      await apiFetch(`/api/boletos/${editData.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          description: editData.description,
+          amount: editData.amount ? parseFloat(editData.amount) : null,
+          due_date: editData.due_date,
+          supplier: editData.supplier || null,
+          is_paid: editData.status === 'paid',
+          paid_at: editData.status === 'paid' ? new Date().toISOString() : null,
+          file_url: newFileUrl,
+        }),
+      });
+      toast.success('Boleto atualizado!');
+      setIsEditOpen(false);
+      setEditFile(null);
+      fetchBoletos();
+    } catch (err) {
+      toast.error('Erro ao atualizar boleto');
+      setEditingUploading(false);
     }
   };
 
@@ -515,6 +590,14 @@ export default function Boletos() {
                               <FileText className="h-4 w-4" />
                             </Button>
                           )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEdit(boleto)}
+                            title="Editar boleto"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
                           {!boleto.is_paid && (
                             <Button
                               variant="ghost"
@@ -562,7 +645,95 @@ export default function Boletos() {
               )}
             </TableBody>
           </Table>
-      </div>
+        </div>
+
+        {/* Edit Dialog */}
+        <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Editar Boleto</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={submitEdit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_description">Descrição *</Label>
+                <Input
+                  id="edit_description"
+                  value={editData.description}
+                  onChange={(e) => setEditData({ ...editData, description: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_amount">Valor *</Label>
+                  <Input
+                    id="edit_amount"
+                    type="number"
+                    step="0.01"
+                    value={editData.amount}
+                    onChange={(e) => setEditData({ ...editData, amount: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_due">Vencimento *</Label>
+                  <Input
+                    id="edit_due"
+                    type="date"
+                    value={editData.due_date}
+                    onChange={(e) => setEditData({ ...editData, due_date: e.target.value })}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_supplier">Fornecedor</Label>
+                <Input
+                  id="edit_supplier"
+                  value={editData.supplier}
+                  onChange={(e) => setEditData({ ...editData, supplier: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_file">Arquivo</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="edit_file"
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    onChange={(e) => setEditFile(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2"
+                    onClick={() => document.getElementById('edit_file')?.click()}
+                  >
+                    <Upload className="h-4 w-4" />
+                    {editFile ? editFile.name : (editData.file_url ? 'Substituir arquivo' : 'Selecionar arquivo')}
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select
+                  value={editData.status}
+                  onValueChange={(v) => setEditData({ ...editData, status: v as 'pending' | 'paid' })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pendente</SelectItem>
+                    <SelectItem value="paid">Pago</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="submit" className="w-full" disabled={editingUploading}> {editingUploading ? 'Enviando arquivo...' : 'Salvar alterações'} </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
     </div>
   );
 }

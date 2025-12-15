@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 import { 
@@ -24,7 +25,12 @@ import {
   Unlock,
   X,
   Check,
-  Printer
+  Printer,
+  Inbox,
+  Download,
+  Eye,
+  BadgeCheck,
+  Ban
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -71,6 +77,28 @@ interface CashSession {
   status: string;
 }
 
+interface CatalogOrderItem {
+  product_id: string;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+interface CatalogOrder {
+  id: string;
+  order_number?: string;
+  customer_name: string | null;
+  customer_phone: string | null;
+  customer_cnpj: string | null;
+  color: string | null;
+  progress_status: 'em_producao' | 'montagem' | 'pronto_entrega';
+  notes: string | null;
+  total: number;
+  items_json: string;
+  created_at: string;
+  status?: 'pending' | 'accepted' | 'rejected';
+}
+
 export default function PDV() {
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -83,6 +111,10 @@ export default function PDV() {
   const [paymentMethod, setPaymentMethod] = useState('dinheiro');
   const [discount, setDiscount] = useState(0);
   const [saleNotes, setSaleNotes] = useState('');
+  const [catalogOrders, setCatalogOrders] = useState<CatalogOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'all'|'pending'|'accepted'|'rejected'>('all');
+  const [importedOrderIds, setImportedOrderIds] = useState<string[]>([]);
   
   // Dialog states
   const [openCashDialog, setOpenCashDialog] = useState(false);
@@ -91,6 +123,10 @@ export default function PDV() {
   const [newCustomerDialog, setNewCustomerDialog] = useState(false);
   const [confirmSaleDialog, setConfirmSaleDialog] = useState(false);
   const [receiptDialog, setReceiptDialog] = useState(false);
+  const [reimportDialogOpen, setReimportDialogOpen] = useState(false);
+  const [reimportTarget, setReimportTarget] = useState<CatalogOrder | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<CatalogOrder | null>(null);
   
   // Receipt data
   const [lastSaleData, setLastSaleData] = useState<{
@@ -104,6 +140,27 @@ export default function PDV() {
     paymentMethod: string;
     notes: string;
   } | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('pdv_imported_catalog_order_ids');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          setImportedOrderIds(arr.filter((v) => typeof v === 'string'));
+        }
+      }
+    } catch {
+      void 0;
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem('pdv_imported_catalog_order_ids', JSON.stringify(importedOrderIds));
+    } catch {
+      void 0;
+    }
+  }, [importedOrderIds]);
   const receiptRef = useRef<HTMLDivElement>(null);
   
   // Form states
@@ -128,15 +185,17 @@ export default function PDV() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [productsData, customersData, sessionData] = await Promise.all([
+      const [productsData, customersData, sessionData, ordersData] = await Promise.all([
         apiFetch('/api/products'),
         apiFetch('/api/customers'),
         apiFetch('/api/cash-register-sessions/open'),
+        apiFetch('/api/catalog/orders?limit=50'),
       ]);
       const list = Array.isArray(productsData) ? productsData : [];
       setProducts(list.filter((p: { active: boolean }) => p.active));
       setCustomers(customersData || []);
       setCurrentSession(sessionData || null);
+      setCatalogOrders(Array.isArray(ordersData) ? ordersData : []);
 
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -145,6 +204,178 @@ export default function PDV() {
       setLoading(false);
     }
   };
+
+  const refreshCatalogOrders = async () => {
+    setOrdersLoading(true);
+    try {
+      const ordersData = await apiFetch('/api/catalog/orders?limit=50');
+      setCatalogOrders(Array.isArray(ordersData) ? ordersData : []);
+      toast({ title: 'Pedidos atualizados' });
+    } catch (error) {
+      console.error('Error fetching catalog orders:', error);
+      toast({ title: 'Erro ao carregar pedidos do catálogo', variant: 'destructive' });
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
+  const [orderActionBusy, setOrderActionBusy] = useState(false);
+  const formatCNPJ = (input: string) => {
+    const d = String(input || '').replace(/\D/g, '').slice(0, 14);
+    if (!d) return '';
+    if (d.length <= 2) return d;
+    if (d.length <= 5) return `${d.slice(0, 2)}.${d.slice(2, 5)}`;
+    if (d.length <= 8) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}`;
+    if (d.length <= 12) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}`;
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
+  };
+
+  const importCatalogOrderToCart = async (order: CatalogOrder) => {
+    if ((order.status || 'pending') === 'rejected') {
+      toast({ title: 'Pedido rejeitado', description: 'Não é possível importar pedidos rejeitados', variant: 'destructive' });
+      return;
+    }
+    if (orderActionBusy) return;
+    const items: CatalogOrderItem[] = (() => {
+      try {
+        const parsed = JSON.parse(order.items_json);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })();
+    if (!items.length) {
+      toast({ title: 'Pedido sem itens', variant: 'destructive' });
+      return;
+    }
+    let added = 0;
+    let skipped = 0;
+    const next = [...cart];
+    for (const it of items) {
+      const prod = products.find(p => p.id === it.product_id);
+      if (!prod) { skipped++; continue; }
+      const idx = next.findIndex(ci => ci.product.id === prod.id);
+      const qtyToAdd = Math.max(1, Math.min(it.quantity, prod.stock_quantity));
+      if (qtyToAdd < 1) { skipped++; continue; }
+      if (idx >= 0) {
+        const newQty = Math.min(next[idx].quantity + qtyToAdd, prod.stock_quantity);
+        next[idx] = { ...next[idx], quantity: newQty };
+      } else {
+        next.push({ product: prod, quantity: qtyToAdd, notes: '' });
+      }
+      added++;
+    }
+    setCart(next);
+    setImportedOrderIds((prev) => (prev.includes(order.id) ? prev : [...prev, order.id]));
+    const title = `Importado: ${added} item(ns)`;
+    const desc = skipped ? `Itens ignorados: ${skipped}` : undefined;
+    toast({ title, description: desc });
+    // Se ainda estiver pendente, marcar como aceito após importação
+    if ((order.status || 'pending') === 'pending') {
+      try {
+        setOrderActionBusy(true);
+        const updated = await apiFetch(`/api/catalog/orders/${order.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) });
+        setCatalogOrders((prev) => prev.map(o => o.id === order.id ? updated : o));
+        if (selectedOrder && selectedOrder.id === order.id) setSelectedOrder(updated);
+      } catch (e) {
+        setCatalogOrders((prev) => prev.map(o => o.id === order.id ? { ...o, status: 'accepted' } : o));
+        if (selectedOrder && selectedOrder.id === order.id) setSelectedOrder({ ...selectedOrder, status: 'accepted' });
+        toast({ title: 'Pedido importado, mas falhou ao marcar como aceito', variant: 'destructive' });
+      } finally {
+        setOrderActionBusy(false);
+      }
+    }
+  };
+
+  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<CatalogOrder | null>(null);
+  const [nextProgress, setNextProgress] = useState<'em_producao'|'montagem'|'pronto_entrega'>('em_producao');
+  const [progressBusy, setProgressBusy] = useState(false);
+  const progressLabel = (s: string) => s === 'em_producao' ? 'Em Produção' : s === 'montagem' ? 'Montagem' : s === 'pronto_entrega' ? 'Pronto para Entrega' : s;
+  useEffect(() => { if (selectedOrder) setNextProgress(selectedOrder.progress_status || 'em_producao'); }, [selectedOrder]);
+
+  const parsedItems = (order: CatalogOrder | null) => {
+    if (!order) return [];
+    try {
+      const arr = JSON.parse(order.items_json);
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const updateOrderProgress = async () => {
+    if (!selectedOrder || progressBusy) return;
+    try {
+      setProgressBusy(true);
+      const updated = await apiFetch(`/api/catalog/orders/${selectedOrder.id}/progress`, { method: 'POST', body: JSON.stringify({ progress_status: nextProgress }) });
+      setCatalogOrders((prev) => prev.map(o => o.id === selectedOrder.id ? updated : o));
+      setSelectedOrder(updated);
+      toast({ title: 'Status de produção atualizado' });
+    } catch (err: any) {
+      toast({ title: 'Erro ao atualizar produção', description: err?.message, variant: 'destructive' });
+    } finally {
+      setProgressBusy(false);
+    }
+  };
+
+  const acceptOrder = async (order: CatalogOrder) => {
+    if (orderActionBusy) return;
+    try {
+      setOrderActionBusy(true);
+      const updated = await apiFetch(`/api/catalog/orders/${order.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'accepted' }) });
+      setCatalogOrders((prev) => prev.map(o => o.id === order.id ? updated : o));
+      setSelectedOrder(updated);
+      toast({ title: 'Pedido aceito' });
+    } catch (err: any) {
+      toast({ title: 'Erro ao aceitar pedido', description: err?.message, variant: 'destructive' });
+    } finally {
+      setOrderActionBusy(false);
+    }
+  };
+
+  const rejectOrder = async (order: CatalogOrder) => {
+    if (orderActionBusy) return;
+    try {
+      setOrderActionBusy(true);
+      const updated = await apiFetch(`/api/catalog/orders/${order.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'rejected' }) });
+      setCatalogOrders((prev) => prev.map(o => o.id === order.id ? updated : o));
+      setSelectedOrder(updated);
+      toast({ title: 'Pedido rejeitado' });
+    } catch (err: any) {
+      toast({ title: 'Erro ao rejeitar pedido', description: err?.message, variant: 'destructive' });
+    } finally {
+      setOrderActionBusy(false);
+    }
+  };
+
+  const deleteCatalogOrder = async (order: CatalogOrder) => {
+    if (orderActionBusy) return;
+    try {
+      setOrderActionBusy(true);
+      try {
+        await apiFetch(`/api/catalog/orders/${order.id}`, { method: 'DELETE' });
+      } catch (e: any) {
+        await apiFetch(`/api/catalog/orders/${order.id}/delete`, { method: 'POST' });
+      }
+      setCatalogOrders((prev) => prev.filter((o) => o.id !== order.id));
+      setImportedOrderIds((prev) => prev.filter((id) => id !== order.id));
+      if (selectedOrder && selectedOrder.id === order.id) {
+        setOrderDialogOpen(false);
+        setSelectedOrder(null);
+      }
+      toast({ title: 'Pedido excluído' });
+    } catch (err: any) {
+      toast({ title: 'Erro ao excluir pedido', description: err?.message, variant: 'destructive' });
+    } finally {
+      setOrderActionBusy(false);
+    }
+  };
+
+  const visibleOrders = catalogOrders.filter((o) =>
+    orderStatusFilter === 'all' ? true : (o.status || 'pending') === orderStatusFilter
+  );
+  const pendingCount = catalogOrders.filter((o) => (o.status || 'pending') === 'pending').length;
 
   const openCashRegister = async () => {
     if (!openingBalance) {
@@ -578,6 +809,89 @@ export default function PDV() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Products */}
           <div className="lg:col-span-2 space-y-4">
+            {/* Catalog Orders */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Inbox className="h-5 w-5" />
+                    Pedidos do Catálogo
+                    {pendingCount > 0 && <Badge variant="secondary">{pendingCount} pendente(s)</Badge>}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Select value={orderStatusFilter} onValueChange={(v) => setOrderStatusFilter(v as any)}>
+                      <SelectTrigger className="w-36">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="pending">Pendentes</SelectItem>
+                        <SelectItem value="accepted">Aceitos</SelectItem>
+                        <SelectItem value="rejected">Rejeitados</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button variant="outline" size="sm" onClick={refreshCatalogOrders} disabled={ordersLoading}>
+                      Atualizar
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {visibleOrders.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nenhum pedido recebido do catálogo</p>
+                ) : (
+                  <div className="space-y-2 max-h-56 overflow-y-auto">
+                    {visibleOrders.map((o) => (
+                      <div key={o.id} className="flex items-center justify-between p-2 rounded-lg border">
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">
+                            {o.order_number && <Badge variant="outline" className="mr-2">{o.order_number}</Badge>}
+                            {o.customer_name || 'Cliente'} • R$ {Number(o.total || 0).toFixed(2)}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {format(new Date(o.created_at), 'dd/MM/yyyy HH:mm', { locale: ptBR })}
+                          </p>
+                          {o.status && (
+                            <p className="text-xs">
+                              Status: <span className={o.status === 'accepted' ? 'text-green-600' : o.status === 'rejected' ? 'text-red-600' : 'text-yellow-600'}>{o.status}</span>
+                            </p>
+                          )}
+                          {importedOrderIds.includes(o.id) && (
+                            <Badge variant="secondary" className="mt-1">Importado</Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" className="gap-2" onClick={() => { setSelectedOrder(o); setOrderDialogOpen(true); }}>
+                            <Eye className="h-4 w-4" />
+                            Ver
+                          </Button>
+                          <Button size="sm" className="gap-2" onClick={() => importCatalogOrderToCart(o)} disabled={(o.status || 'pending') === 'rejected' || orderActionBusy || importedOrderIds.includes(o.id)}>
+                            <Download className="h-4 w-4" />
+                            Importar
+                          </Button>
+                          {importedOrderIds.includes(o.id) && (o.status || 'pending') !== 'rejected' && (
+                            <Button size="sm" variant="outline" onClick={() => { setReimportTarget(o); setReimportDialogOpen(true); }}>
+                              Permitir reimportar
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="gap-2"
+                            onClick={() => { setDeleteTarget(o); setDeleteDialogOpen(true); }}
+                            disabled={orderActionBusy}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Excluir
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Customer Selection */}
             <Card>
               <CardHeader className="pb-3">
@@ -1000,6 +1314,141 @@ export default function PDV() {
         </div>
       )}
 
+      {/* Catalog Order Preview Dialog */}
+      <Dialog open={orderDialogOpen} onOpenChange={setOrderDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Pedido do Catálogo</DialogTitle>
+          </DialogHeader>
+          {selectedOrder && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <span className="text-muted-foreground">Nº Pedido:</span>
+                <span className="font-medium truncate">{selectedOrder.order_number || '—'}</span>
+                <span className="text-muted-foreground">Cliente:</span>
+                <span className="font-medium truncate">{selectedOrder.customer_name || '—'}</span>
+                <span className="text-muted-foreground">WhatsApp:</span>
+                <span className="truncate">{selectedOrder.customer_phone || '—'}</span>
+                <span className="text-muted-foreground">CNPJ:</span>
+                <span className="truncate">{formatCNPJ(selectedOrder.customer_cnpj || '') || '—'}</span>
+                <span className="text-muted-foreground">Criado:</span>
+                <span>{format(new Date(selectedOrder.created_at), 'dd/MM/yyyy HH:mm', { locale: ptBR })}</span>
+                <span className="text-muted-foreground">Status:</span>
+                <span className={selectedOrder.status === 'accepted' ? 'text-green-600' : selectedOrder.status === 'rejected' ? 'text-red-600' : 'text-yellow-600'}>
+                  {selectedOrder.status || 'pending'}
+                </span>
+                <span className="text-muted-foreground">Cor:</span>
+                <span className="truncate">{selectedOrder.color || '—'}</span>
+                <span className="text-muted-foreground">Produção:</span>
+                <span>{progressLabel(selectedOrder.progress_status)}</span>
+                <span className="text-muted-foreground">Importado:</span>
+                <span>{importedOrderIds.includes(selectedOrder.id) ? 'Sim' : 'Não'}</span>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Atualizar status de produção</label>
+                <Select value={nextProgress} onValueChange={(v) => setNextProgress(v as any)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="em_producao">Em Produção</SelectItem>
+                    <SelectItem value="montagem">Montagem</SelectItem>
+                    <SelectItem value="pronto_entrega">Pronto para Entrega</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button onClick={updateOrderProgress} disabled={progressBusy} className="w-full">
+                  Atualizar Produção
+                </Button>
+              </div>
+              {selectedOrder.notes && (
+                <div className="p-2 rounded bg-accent text-sm">
+                  <span className="text-muted-foreground">Observações:</span> {selectedOrder.notes}
+                </div>
+              )}
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {parsedItems(selectedOrder).map((it: any, idx: number) => (
+                  <div key={idx} className="flex justify-between text-sm">
+                    <span className="truncate">{it.name} x{it.quantity}</span>
+                    <span>R$ {(Number(it.price || 0) * Number(it.quantity || 0)).toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-between font-bold">
+                <span>Total</span>
+                <span className="text-primary">R$ {Number(selectedOrder.total || 0).toFixed(2)}</span>
+              </div>
+              <div className="flex gap-2">
+                <Button className="flex-1 gap-2" onClick={() => acceptOrder(selectedOrder)} disabled={selectedOrder.status === 'accepted' || orderActionBusy}>
+                  <BadgeCheck className="h-4 w-4" />
+                  Aceitar
+                </Button>
+                <Button className="flex-1 gap-2" variant="outline" onClick={() => importCatalogOrderToCart(selectedOrder)} disabled={(selectedOrder.status || 'pending') === 'rejected' || orderActionBusy}>
+                  <Download className="h-4 w-4" />
+                  Importar itens
+                </Button>
+                {importedOrderIds.includes(selectedOrder.id) && (selectedOrder.status || 'pending') !== 'rejected' && (
+                  <Button className="flex-1 gap-2" variant="outline" onClick={() => { setReimportTarget(selectedOrder); setReimportDialogOpen(true); }}>
+                    Permitir reimportar
+                  </Button>
+                )}
+                <Button className="flex-1 gap-2" variant="destructive" onClick={() => rejectOrder(selectedOrder)} disabled={selectedOrder.status === 'rejected' || orderActionBusy}>
+                  <Ban className="h-4 w-4" />
+                  Rejeitar
+                </Button>
+                <Button className="flex-1 gap-2" variant="destructive" onClick={() => { setDeleteTarget(selectedOrder); setDeleteDialogOpen(true); }} disabled={orderActionBusy}>
+                  <Trash2 className="h-4 w-4" />
+                  Excluir
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={reimportDialogOpen} onOpenChange={setReimportDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Liberar reimportação</AlertDialogTitle>
+            <AlertDialogDescription>Isso permitirá importar novamente os itens do pedido selecionado.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (reimportTarget) {
+                  setImportedOrderIds((prev) => prev.filter((id) => id !== reimportTarget.id));
+                  toast({ title: 'Reimportação liberada' });
+                }
+                setReimportDialogOpen(false);
+                setReimportTarget(null);
+              }}
+            >
+              Confirmar
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir pedido</AlertDialogTitle>
+            <AlertDialogDescription>Essa ação não pode ser desfeita. Tem certeza?</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex justify-end gap-2">
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deleteTarget) {
+                  deleteCatalogOrder(deleteTarget);
+                }
+                setDeleteDialogOpen(false);
+                setDeleteTarget(null);
+              }}
+            >
+              Confirmar
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Receipt Dialog */}
       <Dialog open={receiptDialog} onOpenChange={setReceiptDialog}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">

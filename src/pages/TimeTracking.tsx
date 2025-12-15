@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Plus, Clock, Search, Pencil, Trash2, ArrowRightCircle, ArrowLeftCircle, FileText, User, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { apiFetch } from '@/lib/api';
@@ -25,6 +26,7 @@ interface TimeRecord {
   lunch_out: string | null;
   lunch_in: string | null;
   clock_out: string | null;
+  daily_rate_override?: number | null;
   notes: string | null;
   employees?: { name: string; daily_rate: number; pix_key?: string | null };
 }
@@ -35,6 +37,7 @@ interface WeeklySummary {
   totalDays: number;
   totalAmount: number;
   pixKey: string | null;
+  adjustedDays: number;
 }
 
 export default function TimeTracking() {
@@ -50,6 +53,8 @@ export default function TimeTracking() {
   
   const [selectedEmployee, setSelectedEmployee] = useState('');
   const [selectedEmployeePixKey, setSelectedEmployeePixKey] = useState('');
+  const [selectedEmployeeDailyRate, setSelectedEmployeeDailyRate] = useState('');
+  const [recordDailyRateOverride, setRecordDailyRateOverride] = useState('');
   const [recordDate, setRecordDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [clockIn, setClockIn] = useState('');
   const [lunchOut, setLunchOut] = useState('');
@@ -61,6 +66,10 @@ export default function TimeTracking() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState<string>('all');
   const [weeklySearchQuery, setWeeklySearchQuery] = useState('');
+  const [weeklyFrom, setWeeklyFrom] = useState('');
+  const [weeklyTo, setWeeklyTo] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -69,10 +78,12 @@ export default function TimeTracking() {
   useEffect(() => {
     if (!selectedEmployee) {
       setSelectedEmployeePixKey('');
+      setSelectedEmployeeDailyRate('');
       return;
     }
     const emp = employees.find(e => e.id === selectedEmployee);
     setSelectedEmployeePixKey(emp?.pix_key || '');
+    setSelectedEmployeeDailyRate(emp ? String(emp.daily_rate ?? '') : '');
   }, [selectedEmployee, employees]);
 
   const fetchData = async () => {
@@ -138,15 +149,19 @@ export default function TimeTracking() {
       lunch_out: lunchOut || null,
       lunch_in: lunchIn || null,
       clock_out: clockOut || null,
+      daily_rate_override: recordDailyRateOverride !== '' ? Number(recordDailyRateOverride) : null,
     };
 
     try {
       await apiFetch(`/api/employees/${selectedEmployee}`, {
         method: 'PATCH',
-        body: JSON.stringify({ pix_key: selectedEmployeePixKey || null }),
+        body: JSON.stringify({
+          pix_key: selectedEmployeePixKey || null,
+          daily_rate: selectedEmployeeDailyRate !== '' ? Number(selectedEmployeeDailyRate) : null,
+        }),
       });
     } catch (e) {
-      toast.error('Erro ao atualizar chave Pix');
+      toast.error('Erro ao atualizar dados do funcionário');
     }
 
     if (editingRecordId) {
@@ -185,6 +200,7 @@ export default function TimeTracking() {
   const resetRecordForm = () => {
     setSelectedEmployee('');
     setSelectedEmployeePixKey('');
+    setRecordDailyRateOverride('');
     setRecordDate(format(new Date(), 'yyyy-MM-dd'));
     setClockIn('');
     setLunchOut('');
@@ -198,6 +214,7 @@ export default function TimeTracking() {
     const emp = employees.find(e => e.id === record.employee_id);
     setSelectedEmployeePixKey(emp?.pix_key || '');
     setRecordDate(record.record_date);
+    setRecordDailyRateOverride(record.daily_rate_override != null ? String(record.daily_rate_override) : '');
     setClockIn(record.clock_in || '');
     setLunchOut(record.lunch_out || '');
     setLunchIn(record.lunch_in || '');
@@ -224,19 +241,32 @@ export default function TimeTracking() {
       
       const matchesEmployee = selectedEmployeeFilter === 'all' || record.employee_id === selectedEmployeeFilter;
       
-      return matchesSearch && matchesEmployee;
+      const rd = parseISO(record.record_date);
+      const matchesFrom = !dateFrom || rd >= parseISO(dateFrom);
+      const matchesTo = !dateTo || rd <= parseISO(dateTo);
+      
+      return matchesSearch && matchesEmployee && matchesFrom && matchesTo;
     });
-  }, [records, searchQuery, selectedEmployeeFilter]);
+  }, [records, searchQuery, selectedEmployeeFilter, dateFrom, dateTo]);
+  
+  const filteredTotal = useMemo(() => {
+    return filteredRecords.reduce((acc, r) => {
+      const v = r.daily_rate_override != null ? r.daily_rate_override : r.employees?.daily_rate;
+      return acc + (v != null ? Number(v) : 0);
+    }, 0);
+  }, [filteredRecords]);
+  
+  const filteredCount = useMemo(() => filteredRecords.length, [filteredRecords]);
 
   // Calculate weekly summary
   const weeklySummary = useMemo((): WeeklySummary[] => {
     const today = new Date();
-    const weekStart = startOfWeek(today, { weekStartsOn: 1 });
-    const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+    const start = weeklyFrom ? parseISO(weeklyFrom) : startOfWeek(today, { weekStartsOn: 1 });
+    const end = weeklyTo ? parseISO(weeklyTo) : endOfWeek(today, { weekStartsOn: 1 });
 
     const weekRecords = records.filter(r => {
       const recordDate = parseISO(r.record_date);
-      return recordDate >= weekStart && recordDate <= weekEnd;
+      return recordDate >= start && recordDate <= end;
     });
 
     const summaryMap = new Map<string, WeeklySummary>();
@@ -250,17 +280,21 @@ export default function TimeTracking() {
             totalDays: 0,
             totalAmount: 0,
             pixKey: record.employees.pix_key,
+            adjustedDays: 0,
           });
         }
         
         const summary = summaryMap.get(record.employee_id)!;
         summary.totalDays += 1;
-        summary.totalAmount += record.employees.daily_rate;
+        summary.totalAmount += (record.daily_rate_override != null ? record.daily_rate_override : record.employees.daily_rate);
+        if (record.daily_rate_override != null) {
+          summary.adjustedDays += 1;
+        }
       }
     });
 
     return Array.from(summaryMap.values());
-  }, [records]);
+  }, [records, weeklyFrom, weeklyTo]);
 
   const selectedEmployeeDetails = useMemo(() => {
     if (selectedEmployeeFilter === 'all') return null;
@@ -279,9 +313,48 @@ export default function TimeTracking() {
       s.employeeName.toLowerCase().includes(q) || (s.pixKey || '').toLowerCase().includes(q),
     );
   }, [weeklySearchQuery, weeklySummary]);
+  
+  const weeklyTotalAmount = useMemo(() => {
+    return filteredWeeklySummary.reduce((acc, s) => acc + (s.totalAmount ?? 0), 0);
+  }, [filteredWeeklySummary]);
+  
+  const weeklyAdjustedTotal = useMemo(() => {
+    return filteredWeeklySummary.reduce((acc, s) => acc + (s.adjustedDays ?? 0), 0);
+  }, [filteredWeeklySummary]);
+  
+  const exportWeeklyCsv = () => {
+    const headers = ['Funcionário', 'Pix', 'Dias Trabalhados', 'Dias Ajustados', 'Total'];
+    const sep = ';';
+    const rows = filteredWeeklySummary.map(s => [
+      s.employeeName || '',
+      s.pixKey || '',
+      String(s.totalDays ?? 0),
+      String(s.adjustedDays ?? 0),
+      Number(s.totalAmount ?? 0).toFixed(2),
+    ]);
+    const csvLines = [
+      headers.join(sep),
+      ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(sep)),
+    ];
+    const csv = csvLines.join('\n');
+    const sLabel = weeklyFrom || format(weekStart, 'yyyy-MM-dd');
+    const eLabel = weeklyTo || format(weekEnd, 'yyyy-MM-dd');
+    const fileName = `resumo_${sLabel}_${eLabel}.csv`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
   const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
+  const displayStart = weeklyFrom ? parseISO(weeklyFrom) : weekStart;
+  const displayEnd = weeklyTo ? parseISO(weeklyTo) : weekEnd;
 
   if (loading) {
     return (
@@ -422,12 +495,34 @@ export default function TimeTracking() {
                 value={selectedEmployeePixKey}
                 onChange={(e) => setSelectedEmployeePixKey(e.target.value)}
               />
-            </div>
-            <div className="flex gap-2">
-              <Button type="submit" className="flex-1">
-                {editingRecordId ? 'Atualizar Ponto' : 'Registrar Ponto'}
-              </Button>
-              {editingRecordId && (
+              </div>
+              <div>
+                <label className="form-label">Diária do funcionário (R$)</label>
+                <Input
+                  type="number"
+                  placeholder="0.00"
+                  value={selectedEmployeeDailyRate}
+                  onChange={(e) => setSelectedEmployeeDailyRate(e.target.value)}
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+              <div>
+                <label className="form-label">Diária deste dia (R$)</label>
+                <Input
+                  type="number"
+                  placeholder="Opcional"
+                  value={recordDailyRateOverride}
+                  onChange={(e) => setRecordDailyRateOverride(e.target.value)}
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" className="flex-1">
+                  {editingRecordId ? 'Atualizar Ponto' : 'Registrar Ponto'}
+                </Button>
+                {editingRecordId && (
                 <Button type="button" variant="outline" onClick={() => {
                   setEditingRecordId(null);
                   resetRecordForm();
@@ -467,6 +562,36 @@ export default function TimeTracking() {
               </SelectContent>
             </Select>
           </div>
+          <div className="w-full md:w-48">
+            <Input
+              type="date"
+              placeholder="De"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+            />
+          </div>
+          <div className="w-full md:w-48">
+            <Input
+              type="date"
+              placeholder="Até"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+            />
+          </div>
+          <div className="w-full md:w-auto">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedEmployeeFilter('all');
+                setDateFrom('');
+                setDateTo('');
+              }}
+            >
+              Limpar filtros
+            </Button>
+          </div>
         </div>
 
         {/* Employee Details Card */}
@@ -488,6 +613,11 @@ export default function TimeTracking() {
                   <p className="font-bold text-lg text-primary">
                     {employeeWeeklySummary.totalDays} dias • R$ {employeeWeeklySummary.totalAmount.toFixed(2)}
                   </p>
+                  <div className="mt-1">
+                    <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30">
+                      Ajustados: {employeeWeeklySummary.adjustedDays}
+                    </Badge>
+                  </div>
                 </div>
               )}
             </div>
@@ -517,6 +647,7 @@ export default function TimeTracking() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Entrada</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Almoço</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Saída</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Diária do dia</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">Ações</th>
                 </tr>
               </thead>
@@ -549,6 +680,24 @@ export default function TimeTracking() {
                         </span>
                       ) : '-'}
                     </td>
+                    <td className="px-4 py-3 text-sm">
+                      {(() => {
+                        const value = record.daily_rate_override != null
+                          ? record.daily_rate_override
+                          : record.employees?.daily_rate;
+                        if (value == null) return '-';
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span>R$ {Number(value).toFixed(2)}</span>
+                            {record.daily_rate_override != null && (
+                              <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30">
+                                Ajustada
+                              </Badge>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
                         <Button
@@ -572,6 +721,13 @@ export default function TimeTracking() {
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="border-t border-border bg-muted/30">
+                  <td className="px-4 py-3 text-right text-sm font-medium" colSpan={5}>Total das diárias • {filteredCount} registros</td>
+                  <td className="px-4 py-3 text-sm font-bold">R$ {filteredTotal.toFixed(2)}</td>
+                  <td />
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}
@@ -584,7 +740,7 @@ export default function TimeTracking() {
           Resumo Semanal de Diárias
         </h2>
         <p className="text-sm text-muted-foreground mb-4">
-          {format(weekStart, 'dd/MM/yyyy', { locale: ptBR })} - {format(weekEnd, 'dd/MM/yyyy', { locale: ptBR })}
+          {format(displayStart, 'dd/MM/yyyy', { locale: ptBR })} - {format(displayEnd, 'dd/MM/yyyy', { locale: ptBR })}
         </p>
         <div className="mb-4 relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -594,6 +750,40 @@ export default function TimeTracking() {
             onChange={(e) => setWeeklySearchQuery(e.target.value)}
             className="pl-10"
           />
+        </div>
+        <div className="mb-4 flex flex-col md:flex-row items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setWeeklySearchQuery('');
+              setWeeklyFrom('');
+              setWeeklyTo('');
+            }}
+          >
+            Limpar filtros do resumo
+          </Button>
+          <Button onClick={exportWeeklyCsv}>
+            Exportar CSV
+          </Button>
+        </div>
+        <div className="mb-4 flex flex-col md:flex-row gap-4">
+          <div className="w-full md:w-48">
+            <Input
+              type="date"
+              placeholder="De"
+              value={weeklyFrom}
+              onChange={(e) => setWeeklyFrom(e.target.value)}
+            />
+          </div>
+          <div className="w-full md:w-48">
+            <Input
+              type="date"
+              placeholder="Até"
+              value={weeklyTo}
+              onChange={(e) => setWeeklyTo(e.target.value)}
+            />
+          </div>
         </div>
 
         {filteredWeeklySummary.length === 0 ? (
@@ -608,6 +798,7 @@ export default function TimeTracking() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Funcionário</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Pix</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Dias Trabalhados</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Dias Ajustados</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">Total (R$)</th>
                 </tr>
               </thead>
@@ -617,12 +808,28 @@ export default function TimeTracking() {
                     <td className="px-4 py-3 text-sm font-medium">{summary.employeeName}</td>
                     <td className="px-4 py-3 text-sm break-all text-muted-foreground">{summary.pixKey || '-'}</td>
                     <td className="px-4 py-3 text-sm">{summary.totalDays} dias</td>
+                    <td className="px-4 py-3 text-sm">
+                      {summary.adjustedDays > 0 ? (
+                        <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30">
+                          {summary.adjustedDays}
+                        </Badge>
+                      ) : (
+                        0
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-right font-bold text-primary">
                       R$ {summary.totalAmount.toFixed(2)}
                     </td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="border-t border-border bg-muted/30">
+                  <td className="px-4 py-3 text-right text-sm font-medium" colSpan={3}>Totais semanais</td>
+                  <td className="px-4 py-3 text-sm font-medium">{weeklyAdjustedTotal}</td>
+                  <td className="px-4 py-3 text-sm text-right font-bold">R$ {weeklyTotalAmount.toFixed(2)}</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}

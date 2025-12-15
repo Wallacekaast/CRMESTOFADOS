@@ -1,7 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
+const API_BASE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL ?? '');
 
 export async function apiFetch(path: string, init?: RequestInit) {
-  const url = `${API_BASE_URL}${path}`;
+  const base = API_BASE_URL || '';
+  const url = `${base}${path}`;
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     ...init,

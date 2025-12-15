@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -47,6 +48,8 @@ export default function Inventory() {
   const [movementType, setMovementType] = useState<'entrada' | 'saida'>('entrada');
   const [movementQty, setMovementQty] = useState('');
   const [movementObs, setMovementObs] = useState('');
+  const [itemDialogOpen, setItemDialogOpen] = useState(false);
+  const [movementDialogOpen, setMovementDialogOpen] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -121,6 +124,7 @@ export default function Inventory() {
     setItemUnit(item.unit);
     setItemMinStock(String(item.minimum_stock));
     setItemCategory(item.category || '');
+    setItemDialogOpen(true);
   };
 
   const handleDeleteItem = async (id: string) => {
@@ -201,82 +205,34 @@ export default function Inventory() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Add Item Form */}
-        <div className="content-card animate-fade-in">
-          <h2 className="section-title mb-4">
-            <Plus className="h-5 w-5 text-primary" />
-            {editingItemId ? 'Editar Item' : 'Novo Item de Estoque'}
-          </h2>
-
-          <form onSubmit={handleAddItem} className="space-y-4">
-            <div>
-              <label className="form-label">Nome *</label>
-              <Input
-                placeholder="Ex.: Espuma D33"
-                value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="form-label">SKU</label>
-                <Input
-                  placeholder="Opcional"
-                  value={itemSku}
-                  onChange={(e) => setItemSku(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="form-label">Unidade</label>
-                <Input
-                  placeholder="un"
-                  value={itemUnit}
-                  onChange={(e) => setItemUnit(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="form-label">Estoque mínimo</label>
-                <Input
-                  type="number"
-                  placeholder="Opcional"
-                  value={itemMinStock}
-                  onChange={(e) => setItemMinStock(e.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label className="form-label">Categoria</label>
-                <Input
-                  placeholder="Opcional"
-                  value={itemCategory}
-                  onChange={(e) => setItemCategory(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Button type="submit" className="flex-1">
-                {editingItemId ? 'Atualizar Item' : 'Cadastrar Item'}
-              </Button>
-              {editingItemId && (
-                <Button type="button" variant="outline" onClick={() => {
-                  setEditingItemId(null);
-                  setItemName('');
-                  setItemSku('');
-                  setItemUnit('un');
-                  setItemMinStock('');
-                  setItemCategory('');
-                }}>
-                  Cancelar
-                </Button>
-              )}
-            </div>
-          </form>
+      <div className="mb-6">
+        {/* Ações: apenas botões (compacto) */}
+        <div className="mb-2">
+          <div className="flex flex-col sm:flex-row sm:justify-end gap-2">
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => {
+                setEditingItemId(null);
+                setItemName('');
+                setItemSku('');
+                setItemUnit('un');
+                setItemMinStock('');
+                setItemCategory('');
+                setItemDialogOpen(true);
+              }}
+            >
+              Registrar novo produto
+            </Button>
+            <Button className="w-full sm:w-auto" variant="outline" onClick={() => setMovementDialogOpen(true)}>
+              Movimentar estoque
+            </Button>
+          </div>
         </div>
 
-        {/* Items List */}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Itens de Estoque */}
         <div className="content-card animate-fade-in">
           <h2 className="section-title mb-4">
             <Package className="h-5 w-5 text-primary" />
@@ -330,16 +286,127 @@ export default function Inventory() {
             </div>
           )}
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Movement Form */}
+        {/* Recent Movements */}
         <div className="content-card animate-fade-in">
           <h2 className="section-title mb-4">
-            <ArrowDownCircle className="h-5 w-5 text-primary" />
-            Movimentar Estoque
+            <ArrowUpCircle className="h-5 w-5 text-primary" />
+            Movimentos Recentes
           </h2>
 
+          {movements.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+              <p className="text-sm">Nenhum movimento</p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto scrollbar-thin">
+              {movements.map((movement) => (
+                <div key={movement.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/30">
+                  <div className="flex items-center gap-3">
+                    <div className={`status-badge ${movement.movement_type === 'entrada' ? 'status-entry' : 'status-exit'}`}>
+                      {movement.movement_type === 'entrada' ? (
+                        <ArrowDownCircle className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpCircle className="h-3 w-3" />
+                      )}
+                      {movement.movement_type === 'entrada' ? 'Entrada' : 'Saída'}
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">{movement.item_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {format(new Date(movement.created_at), 'dd/MM/yyyy HH:mm', { locale: ptBR })}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className={`font-medium ${movement.movement_type === 'entrada' ? 'text-success' : 'text-destructive'}`}>
+                      {movement.movement_type === 'entrada' ? '+' : '-'}{movement.quantity}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Dialog: Novo/Editar Item */}
+      <Dialog open={itemDialogOpen} onOpenChange={setItemDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingItemId ? 'Editar Item' : 'Novo Item de Estoque'}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleAddItem} className="space-y-4">
+            <div>
+              <label className="form-label">Nome *</label>
+              <Input
+                placeholder="Ex.: Espuma D33"
+                value={itemName}
+                onChange={(e) => setItemName(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="form-label">SKU</label>
+                <Input
+                  placeholder="Opcional"
+                  value={itemSku}
+                  onChange={(e) => setItemSku(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="form-label">Unidade</label>
+                <Input
+                  placeholder="un"
+                  value={itemUnit}
+                  onChange={(e) => setItemUnit(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="form-label">Estoque mínimo</label>
+                <Input
+                  type="number"
+                  placeholder="Opcional"
+                  value={itemMinStock}
+                  onChange={(e) => setItemMinStock(e.target.value)}
+                  min="0"
+                />
+              </div>
+              <div>
+                <label className="form-label">Categoria</label>
+                <Input
+                  placeholder="Opcional"
+                  value={itemCategory}
+                  onChange={(e) => setItemCategory(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" className="flex-1">
+                {editingItemId ? 'Atualizar Item' : 'Cadastrar Item'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEditingItemId(null);
+                  setItemDialogOpen(false);
+                }}
+              >
+                Fechar
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Movimentar Estoque */}
+      <Dialog open={movementDialogOpen} onOpenChange={setMovementDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Movimentar Estoque</DialogTitle>
+          </DialogHeader>
           <form onSubmit={handleMovement} className="space-y-4">
             <div>
               <label className="form-label">Item *</label>
@@ -389,53 +456,78 @@ export default function Inventory() {
                 rows={2}
               />
             </div>
-            <Button type="submit" className="w-full">
-              Registrar Movimento
-            </Button>
+            <div className="flex gap-2">
+              <Button type="submit" className="flex-1">
+                Registrar Movimento
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setMovementDialogOpen(false)}>
+                Fechar
+              </Button>
+            </div>
           </form>
-        </div>
+        </DialogContent>
+      </Dialog>
 
-        {/* Recent Movements */}
-        <div className="content-card animate-fade-in">
-          <h2 className="section-title mb-4">
-            <ArrowUpCircle className="h-5 w-5 text-primary" />
-            Movimentos Recentes
-          </h2>
-
-          {movements.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-              <p className="text-sm">Nenhum movimento</p>
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto scrollbar-thin">
-              {movements.map((movement) => (
-                <div key={movement.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/30">
-                  <div className="flex items-center gap-3">
-                    <div className={`status-badge ${movement.movement_type === 'entrada' ? 'status-entry' : 'status-exit'}`}>
-                      {movement.movement_type === 'entrada' ? (
-                        <ArrowDownCircle className="h-3 w-3" />
-                      ) : (
-                        <ArrowUpCircle className="h-3 w-3" />
-                      )}
-                      {movement.movement_type === 'entrada' ? 'Entrada' : 'Saída'}
-                    </div>
-                    <div>
-                      <p className="font-medium text-sm">{movement.item_name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {format(new Date(movement.created_at), 'dd/MM/yyyy HH:mm', { locale: ptBR })}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className={`font-medium ${movement.movement_type === 'entrada' ? 'text-success' : 'text-destructive'}`}>
-                      {movement.movement_type === 'entrada' ? '+' : '-'}{movement.quantity}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Lista completa abaixo */}
+      <div className="content-card animate-fade-in mt-6">
+        <h2 className="section-title mb-4">
+          <Package className="h-5 w-5 text-primary" />
+          Lista Completa do Estoque
+        </h2>
+        {items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+            <Package className="h-12 w-12 mb-3 opacity-30" />
+            <p className="text-sm">Nenhum item cadastrado</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Nome</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">SKU</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Categoria</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Unidade</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">Estoque</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">Mínimo</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-muted-foreground">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
+                    <td className="px-4 py-3 text-sm font-medium">{item.name}</td>
+                    <td className="px-4 py-3 text-sm">{item.sku || '-'}</td>
+                    <td className="px-4 py-3 text-sm">{item.category || '-'}</td>
+                    <td className="px-4 py-3 text-sm">{item.unit}</td>
+                    <td className="px-4 py-3 text-sm text-right">{item.current_stock}</td>
+                    <td className="px-4 py-3 text-sm text-right">{item.minimum_stock}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleEditItem(item)}
+                          className="h-8 w-8"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDeleteItem(item.id)}
+                          className="h-8 w-8 text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
